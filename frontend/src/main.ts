@@ -204,6 +204,9 @@ function spawnUnit(data: UnitData) {
 // --- Interaction ---
 
 function onPointerDown(e: PointerEvent) {
+    // Only interact if clicking on the canvas (ignore UI)
+    if(e.target !== renderer.domElement) return;
+
     if(e.button !== 0) return;
     updateMouse(e);
     raycaster.setFromCamera(mouse, camera);
