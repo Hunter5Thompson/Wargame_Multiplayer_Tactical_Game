@@ -31,16 +31,41 @@ let dragOffset = new THREE.Vector3();
 // --- Network ---
 function initNetwork() {
     socket = new WebSocket(CONFIG.wsUrl);
-    
+
     socket.onopen = () => {
         console.log("[NET] Connected to Skyfield Core");
-        document.querySelector('span')!.innerText = "ONLINE";
-        document.querySelector('span')!.style.color = "#0f0";
+        const statusElement = document.querySelector('span');
+        if (statusElement) {
+            statusElement.innerText = "ONLINE";
+            statusElement.style.color = "#0f0";
+        }
     };
 
     socket.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        handleNetworkMessage(msg);
+        try {
+            const msg = JSON.parse(event.data);
+            handleNetworkMessage(msg);
+        } catch (e) {
+            console.error('[NET] Invalid JSON received:', event.data);
+        }
+    };
+
+    socket.onerror = (error) => {
+        console.error('[NET] WebSocket error:', error);
+        const statusElement = document.querySelector('span');
+        if (statusElement) {
+            statusElement.innerText = "ERROR";
+            statusElement.style.color = "#f00";
+        }
+    };
+
+    socket.onclose = () => {
+        console.log('[NET] Connection closed');
+        const statusElement = document.querySelector('span');
+        if (statusElement) {
+            statusElement.innerText = "OFFLINE";
+            statusElement.style.color = "#f80";
+        }
     };
 }
 
@@ -111,12 +136,16 @@ function setupEnvironment() {
     // 1. Visual Layer (Fake Splat for now)
     const canvas = document.createElement('canvas');
     canvas.width = 512; canvas.height = 512;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        console.error('Failed to get 2D context');
+        return;
+    }
     ctx.fillStyle = '#2b332b'; ctx.fillRect(0,0,512,512);
     // Noise
     for(let i=0; i<1000; i++) {
         ctx.fillStyle = Math.random()>0.5 ? '#354035' : '#202820';
-        ctx.beginPath(); ctx.arc(Math.random()*512, Math.random()*512, Math.random()*5, 0, 6); ctx.fill();
+        ctx.beginPath(); ctx.arc(Math.random()*512, Math.random()*512, Math.random()*5, 0, Math.PI * 2); ctx.fill();
     }
     // Roads
     ctx.strokeStyle = '#444'; ctx.lineWidth = 20;
@@ -124,15 +153,17 @@ function setupEnvironment() {
 
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.MeshBasicMaterial({ map: tex });
-    const geo = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
-    geo.rotateX(-Math.PI/2);
-    const visual = new THREE.Mesh(geo, mat);
+    const geo1 = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
+    geo1.rotateX(-Math.PI/2);
+    const visual = new THREE.Mesh(geo1, mat);
     visual.position.y = -0.1;
     scene.add(visual);
 
     // 2. Physics Layer (Invisible)
     const physMat = new THREE.MeshBasicMaterial({ visible: false }); // set true to debug
-    groundPlane = new THREE.Mesh(geo, physMat);
+    const geo2 = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
+    geo2.rotateX(-Math.PI/2);
+    groundPlane = new THREE.Mesh(geo2, physMat);
     scene.add(groundPlane);
     
     const grid = new THREE.GridHelper(CONFIG.mapWidth, 20, 0x000000, 0x555555);
@@ -204,21 +235,23 @@ function onPointerDown(e: PointerEvent) {
 
 function onPointerMove(e: PointerEvent) {
     updateMouse(e);
-    
+
     if(isDragging && selectedUnitId) {
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObject(groundPlane);
-        
+
         if(hits.length > 0) {
             const target = hits[0].point.add(dragOffset);
-            const unit = units.get(selectedUnitId)!;
-            
-            // Local Update
-            unit.position.set(target.x, 0, target.z);
-            updateUnitUI(selectedUnitId, target.x, target.z);
+            const unit = units.get(selectedUnitId);
 
-            // Network Update (send to server)
-            sendMove(selectedUnitId, target.x, target.z);
+            if (unit) {
+                // Local Update
+                unit.position.set(target.x, 0, target.z);
+                updateUnitUI(selectedUnitId, target.x, target.z);
+
+                // Network Update (send to server)
+                sendMove(selectedUnitId, target.x, target.z);
+            }
         }
     }
 }
@@ -236,13 +269,21 @@ function selectUnit(id: string | null) {
     }
 
     selectedUnitId = id;
-    const ui = document.getElementById('unit-panel')!;
+    const ui = document.getElementById('unit-panel');
+    if (!ui) return;
 
     if(id) {
-        const u = units.get(id)!;
+        const u = units.get(id);
+        if (!u) return;
+
         u.userData.selectionRing.visible = true;
         ui.style.display = 'block';
-        document.getElementById('u-name')!.innerText = u.userData.name;
+
+        const nameElement = document.getElementById('u-name');
+        if (nameElement) {
+            nameElement.innerText = u.userData.name;
+        }
+
         updateUnitUI(id, u.position.x, u.position.z);
     } else {
         ui.style.display = 'none';
@@ -251,8 +292,10 @@ function selectUnit(id: string | null) {
 
 function updateUnitUI(id: string, x: number, z: number) {
     if(selectedUnitId === id) {
-        document.getElementById('u-coords')!.innerText = 
-            `GRID: ${x.toFixed(1)} / ${z.toFixed(1)}`;
+        const coordsElement = document.getElementById('u-coords');
+        if (coordsElement) {
+            coordsElement.innerText = `GRID: ${x.toFixed(1)} / ${z.toFixed(1)}`;
+        }
     }
 }
 

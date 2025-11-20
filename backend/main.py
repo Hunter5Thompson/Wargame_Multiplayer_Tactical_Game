@@ -25,16 +25,19 @@ class ConnectionManager:
         print(f"Client connected. Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        try:
+            self.active_connections.remove(websocket)
+        except ValueError:
+            pass  # Already removed
         print(f"Client disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict, sender: WebSocket = None):
         """Sendet eine Nachricht an alle verbundenen Clients (außer optional dem Sender)"""
         json_msg = json.dumps(message)
         for connection in self.active_connections:
-            # Optional: Don't echo back to sender if needed (hier senden wir an alle für Sync)
-            # if connection != sender: 
-            await connection.send_text(json_msg)
+            # Don't echo back to sender for efficiency
+            if connection != sender:
+                await connection.send_text(json_msg)
 
 manager = ConnectionManager()
 
@@ -51,13 +54,21 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Warten auf Nachrichten vom Frontend (z.B. Unit Move)
             data = await websocket.receive_text()
-            payload = json.loads(data)
-            
-            # Logik: Wenn "MOVE", dann Broadcast an alle anderen
-            # Hier könnte später auch Server-Side Validation (Cheating prevention) stehen
-            
-            print(f"Received: {payload}")
-            await manager.broadcast(payload)
-            
+            try:
+                payload = json.loads(data)
+
+                # Logik: Wenn "MOVE", dann Broadcast an alle anderen
+                # Hier könnte später auch Server-Side Validation (Cheating prevention) stehen
+
+                print(f"Received: {payload}")
+                await manager.broadcast(payload, sender=websocket)
+            except json.JSONDecodeError:
+                print(f"Invalid JSON received: {data}")
+            except Exception as e:
+                print(f"Error processing message: {e}")
+
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        print(f"Unexpected error: {e}")
         manager.disconnect(websocket)
