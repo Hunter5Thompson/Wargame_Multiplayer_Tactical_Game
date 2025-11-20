@@ -126,6 +126,7 @@ function init() {
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
     document.getElementById('btn-reset')?.addEventListener('click', () => controls.reset());
 
     initNetwork();
@@ -205,7 +206,7 @@ function spawnUnit(data: UnitData) {
 
 function onPointerDown(e: PointerEvent) {
     // Only interact if clicking on the canvas (ignore UI)
-    if(e.target !== renderer.domElement) return;
+    if(!renderer.domElement.contains(e.target as Node)) return;
 
     if(e.button !== 0) return;
     updateMouse(e);
@@ -238,6 +239,13 @@ function onPointerDown(e: PointerEvent) {
 
 function onPointerMove(e: PointerEvent) {
     updateMouse(e);
+
+    // Only interact if pointer is over the canvas (ignore UI)
+    if(isDragging && !renderer.domElement.contains(e.target as Node)) {
+        // Cancel drag if pointer moves over UI
+        onPointerUp();
+        return;
+    }
 
     if(isDragging && selectedUnitId) {
         raycaster.setFromCamera(mouse, camera);
