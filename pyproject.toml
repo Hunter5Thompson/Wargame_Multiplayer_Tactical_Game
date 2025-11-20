@@ -1,0 +1,61 @@
+[project]
+name = "aether-gs"
+version = "0.1.0"
+description = "Project SKYFIELD: Skyfall-GS Wargaming System Core"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Rob", email = "rob@skyfield.internal" }
+]
+license = { text = "MIT" }
+
+# --- Hauptabhängigkeiten ---
+dependencies = [
+    # --- Web Server & API ---
+    "fastapi>=0.110.0",          # Das modernste Async Framework
+    "uvicorn[standard]>=0.27.0", # Der ASGI Server (Production ready)
+    "python-multipart>=0.0.9",   # Wichtig für Datei-Uploads (Bilder/Splats)
+    "websockets>=12.0",          # Für Real-Time Sync (Blue/Red Moves)
+    "pydantic-settings>=2.2.0",  # Lädt Konfiguration sicher aus .env
+
+    # --- AI & Computer Vision Core ---
+    "torch>=2.2.0",              # PyTorch (Basis für alles)
+    "torchvision>=0.17.0",       # Bildverarbeitung für Torch
+    "diffusers>=0.26.0",         # Stable Diffusion Pipeline (HuggingFace)
+    "transformers>=4.38.0",      # Benötigt für CLIP/Text-Encoder
+    "accelerate>=0.27.0",        # Optimiert Model-Loading (CPU offload)
+    
+    # --- Image & Geometry Processing ---
+    "numpy>=1.26.0",             # Mathe-Basis
+    "pillow>=10.2.0",            # Bildbearbeitung (PIL)
+    "opencv-python-headless>=4.9.0", # CV Tools (Headless für Server)
+    "plyfile>=1.0.3",            # Lesen/Schreiben von .ply (Gaussian Splats)
+    "trimesh>=4.1.0",            # Optional: Für Mesh/Heightmap Export
+    
+    # --- Data & State ---
+    "redis>=5.0.1",              # Schnellster Store für Game-State/Session Cache
+    "httpx>=0.27.0",             # Async HTTP Client (um externe GPUs/RunPod anzufunken)
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# --- Development Tools (werden mit 'uv sync --dev' installiert) ---
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",    # Testing
+    "ruff>=0.3.0",      # Extrem schneller Linter & Formatter (ersetzt Black/Flake8)
+    "black>=24.0.0",    # (Optional, falls du Black bevorzugst, Ruff kann das aber auch)
+]
+
+# --- Ruff Konfiguration (Linter Einstellungen) ---
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"] # E=Error, F=Pyflakes, I=Isort (Imports sortieren)
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]

@@ -1,0 +1,277 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+// --- Types ---
+type UnitData = {
+    id: string;
+    name: string;
+    team: 'blue' | 'red';
+    x: number;
+    z: number;
+};
+
+// --- Globals ---
+const CONFIG = {
+    wsUrl: 'ws://localhost:8000/ws/tactical',
+    mapWidth: 200,
+    mapHeight: 200,
+};
+
+let socket: WebSocket;
+let scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer;
+let controls: OrbitControls;
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let groundPlane: THREE.Mesh;
+let units: Map<string, THREE.Group> = new Map(); // Map ID -> Mesh
+let selectedUnitId: string | null = null;
+let isDragging = false;
+let dragOffset = new THREE.Vector3();
+
+// --- Network ---
+function initNetwork() {
+    socket = new WebSocket(CONFIG.wsUrl);
+    
+    socket.onopen = () => {
+        console.log("[NET] Connected to Skyfield Core");
+        document.querySelector('span')!.innerText = "ONLINE";
+        document.querySelector('span')!.style.color = "#0f0";
+    };
+
+    socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleNetworkMessage(msg);
+    };
+}
+
+function sendMove(id: string, x: number, z: number) {
+    if(socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'MOVE', id, x, z }));
+    }
+}
+
+function handleNetworkMessage(msg: any) {
+    if (msg.type === 'MOVE') {
+        const unit = units.get(msg.id);
+        if (unit) {
+            // Smooth interpolation could go here, jumping for now
+            unit.position.set(msg.x, 0, msg.z);
+            
+            // Update UI if selected
+            if(selectedUnitId === msg.id) updateUnitUI(msg.id, msg.x, msg.z);
+        }
+    }
+}
+
+// --- Engine ---
+function init() {
+    // Scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    
+    // Camera
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 80, 80);
+    
+    // Renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('canvas-container')?.appendChild(renderer.domElement);
+    
+    // Controls
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI / 2.1;
+
+    // Lights
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    dirLight.position.set(50, 100, 50);
+    scene.add(dirLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+    // Environment (Physics & Visuals)
+    setupEnvironment();
+
+    // Init Demo Units
+    spawnUnit({ id: 'u1', name: 'Leopard 2A7', team: 'blue', x: -10, z: 10 });
+    spawnUnit({ id: 'u2', name: 'T-90M', team: 'red', x: 20, z: -20 });
+
+    // Inputs
+    window.addEventListener('resize', onResize);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerup', onPointerUp);
+    document.getElementById('btn-reset')?.addEventListener('click', () => controls.reset());
+
+    initNetwork();
+    animate();
+}
+
+function setupEnvironment() {
+    // 1. Visual Layer (Fake Splat for now)
+    const canvas = document.createElement('canvas');
+    canvas.width = 512; canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#2b332b'; ctx.fillRect(0,0,512,512);
+    // Noise
+    for(let i=0; i<1000; i++) {
+        ctx.fillStyle = Math.random()>0.5 ? '#354035' : '#202820';
+        ctx.beginPath(); ctx.arc(Math.random()*512, Math.random()*512, Math.random()*5, 0, 6); ctx.fill();
+    }
+    // Roads
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 20;
+    ctx.beginPath(); ctx.moveTo(0,256); ctx.lineTo(512,256); ctx.stroke();
+
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.MeshBasicMaterial({ map: tex });
+    const geo = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
+    geo.rotateX(-Math.PI/2);
+    const visual = new THREE.Mesh(geo, mat);
+    visual.position.y = -0.1;
+    scene.add(visual);
+
+    // 2. Physics Layer (Invisible)
+    const physMat = new THREE.MeshBasicMaterial({ visible: false }); // set true to debug
+    groundPlane = new THREE.Mesh(geo, physMat);
+    scene.add(groundPlane);
+    
+    const grid = new THREE.GridHelper(CONFIG.mapWidth, 20, 0x000000, 0x555555);
+    grid.position.y = 0.05;
+    grid.material.opacity = 0.2;
+    grid.material.transparent = true;
+    scene.add(grid);
+}
+
+function spawnUnit(data: UnitData) {
+    const group = new THREE.Group();
+    group.position.set(data.x, 0, data.z);
+
+    // 3D Mesh
+    const color = data.team === 'blue' ? 0x3388ff : 0xff3333;
+    const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 2.5, 6),
+        new THREE.MeshStandardMaterial({ color: color })
+    );
+    mesh.position.y = 1.25;
+    group.add(mesh);
+
+    // Selection Ring
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(5, 5.5, 32).rotateX(-Math.PI/2),
+        new THREE.MeshBasicMaterial({ color: 0x00ff00, visible: false })
+    );
+    ring.position.y = 0.1;
+    group.add(ring);
+
+    // Metadata
+    group.userData = { ...data, selectionRing: ring };
+    
+    scene.add(group);
+    units.set(data.id, group);
+}
+
+// --- Interaction ---
+
+function onPointerDown(e: PointerEvent) {
+    if(e.button !== 0) return;
+    updateMouse(e);
+    raycaster.setFromCamera(mouse, camera);
+
+    // Check Units
+    const intersectObjects = Array.from(units.values()).map(u => u.children[0]); // check box meshes
+    const hits = raycaster.intersectObjects(intersectObjects);
+
+    if(hits.length > 0) {
+        const group = hits[0].object.parent as THREE.Group;
+        selectUnit(group.userData.id);
+        
+        isDragging = true;
+        controls.enabled = false;
+        
+        // Calc offset
+        const groundHits = raycaster.intersectObject(groundPlane);
+        if(groundHits.length > 0) {
+            dragOffset.subVectors(group.position, groundHits[0].point);
+        }
+    } else {
+        // Deselect if clicking ground
+        const groundHits = raycaster.intersectObject(groundPlane);
+        if(groundHits.length > 0) {
+            selectUnit(null);
+        }
+    }
+}
+
+function onPointerMove(e: PointerEvent) {
+    updateMouse(e);
+    
+    if(isDragging && selectedUnitId) {
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObject(groundPlane);
+        
+        if(hits.length > 0) {
+            const target = hits[0].point.add(dragOffset);
+            const unit = units.get(selectedUnitId)!;
+            
+            // Local Update
+            unit.position.set(target.x, 0, target.z);
+            updateUnitUI(selectedUnitId, target.x, target.z);
+
+            // Network Update (send to server)
+            sendMove(selectedUnitId, target.x, target.z);
+        }
+    }
+}
+
+function onPointerUp() {
+    isDragging = false;
+    controls.enabled = true;
+}
+
+function selectUnit(id: string | null) {
+    // Old deselect
+    if(selectedUnitId) {
+        const u = units.get(selectedUnitId);
+        if(u) u.userData.selectionRing.visible = false;
+    }
+
+    selectedUnitId = id;
+    const ui = document.getElementById('unit-panel')!;
+
+    if(id) {
+        const u = units.get(id)!;
+        u.userData.selectionRing.visible = true;
+        ui.style.display = 'block';
+        document.getElementById('u-name')!.innerText = u.userData.name;
+        updateUnitUI(id, u.position.x, u.position.z);
+    } else {
+        ui.style.display = 'none';
+    }
+}
+
+function updateUnitUI(id: string, x: number, z: number) {
+    if(selectedUnitId === id) {
+        document.getElementById('u-coords')!.innerText = 
+            `GRID: ${x.toFixed(1)} / ${z.toFixed(1)}`;
+    }
+}
+
+function updateMouse(e: PointerEvent) {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+}
+
+function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+// Boot
+init();
