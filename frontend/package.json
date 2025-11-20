@@ -9,8 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "three": "^0.160.0",
-    "spark-renderer": "^0.0.10"
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "typescript": "^5.2.0",
