@@ -10,6 +10,15 @@ type UnitData = {
     z: number;
 };
 
+type NetworkMessage =
+    | { type: 'MOVE'; id: string; x: number; z: number }
+    | { type: 'INIT'; units: Record<string, any> };
+
+type UnitMesh = THREE.Group & {
+    targetPosition?: THREE.Vector3;
+    userData: UnitData & { selectionRing: THREE.Mesh };
+};
+
 // --- Globals ---
 const CONFIG = {
     wsUrl: 'ws://localhost:8000/ws/tactical',
@@ -23,7 +32,7 @@ let controls: OrbitControls;
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
 let groundPlane: THREE.Mesh;
-let units: Map<string, THREE.Group> = new Map(); // Map ID -> Mesh
+let units: Map<string, UnitMesh> = new Map(); // Map ID -> Mesh
 let selectedUnitId: string | null = null;
 let isDragging = false;
 let dragOffset = new THREE.Vector3();
@@ -34,7 +43,7 @@ function initNetwork() {
 
     socket.onopen = () => {
         console.log("[NET] Connected to Skyfield Core");
-        const statusElement = document.querySelector('span');
+        const statusElement = document.getElementById('status');
         if (statusElement) {
             statusElement.innerText = "ONLINE";
             statusElement.style.color = "#0f0";
@@ -52,7 +61,7 @@ function initNetwork() {
 
     socket.onerror = (error) => {
         console.error('[NET] WebSocket error:', error);
-        const statusElement = document.querySelector('span');
+        const statusElement = document.getElementById('status');
         if (statusElement) {
             statusElement.innerText = "ERROR";
             statusElement.style.color = "#f00";
@@ -61,7 +70,7 @@ function initNetwork() {
 
     socket.onclose = () => {
         console.log('[NET] Connection closed');
-        const statusElement = document.querySelector('span');
+        const statusElement = document.getElementById('status');
         if (statusElement) {
             statusElement.innerText = "OFFLINE";
             statusElement.style.color = "#f80";
@@ -75,13 +84,24 @@ function sendMove(id: string, x: number, z: number) {
     }
 }
 
-function handleNetworkMessage(msg: any) {
-    if (msg.type === 'MOVE') {
+function handleNetworkMessage(msg: NetworkMessage) {
+    if (msg.type === 'INIT') {
+        // Handle initial game state from server
+        console.log('[NET] Received initial state:', msg.units);
+        // Units are already spawned locally, just sync positions if needed
+        for (const [unitId, unitData] of Object.entries(msg.units)) {
+            const unit = units.get(unitId);
+            if (unit && unitData.position) {
+                const pos = unitData.position as { x: number; y: number; z: number };
+                unit.position.set(pos.x, 0, pos.z);
+            }
+        }
+    } else if (msg.type === 'MOVE') {
         const unit = units.get(msg.id);
         if (unit) {
-            // Smooth interpolation could go here, jumping for now
-            unit.position.set(msg.x, 0, msg.z);
-            
+            // Smooth interpolation using target position
+            unit.targetPosition = new THREE.Vector3(msg.x, 0, msg.z);
+
             // Update UI if selected
             if(selectedUnitId === msg.id) updateUnitUI(msg.id, msg.x, msg.z);
         }
@@ -174,8 +194,8 @@ function setupEnvironment() {
     scene.add(grid);
 }
 
-function spawnUnit(data: UnitData) {
-    const group = new THREE.Group();
+function spawnUnit(data: UnitData): UnitMesh {
+    const group = new THREE.Group() as UnitMesh;
     group.position.set(data.x, 0, data.z);
 
     // 3D Mesh
@@ -197,9 +217,10 @@ function spawnUnit(data: UnitData) {
 
     // Metadata
     group.userData = { ...data, selectionRing: ring };
-    
+
     scene.add(group);
     units.set(data.id, group);
+    return group;
 }
 
 // --- Interaction ---
@@ -324,6 +345,24 @@ function onResize() {
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
+
+    // Smooth movement interpolation for all units
+    units.forEach((unit) => {
+        if (unit.targetPosition) {
+            const distance = unit.position.distanceTo(unit.targetPosition);
+
+            // If close enough, snap to target
+            if (distance < 0.1) {
+                unit.position.copy(unit.targetPosition);
+                unit.targetPosition = undefined;
+            } else {
+                // Smooth lerp with speed factor
+                const lerpFactor = Math.min(0.1, distance * 0.05);
+                unit.position.lerp(unit.targetPosition, lerpFactor);
+            }
+        }
+    });
+
     renderer.render(scene, camera);
 }
 
