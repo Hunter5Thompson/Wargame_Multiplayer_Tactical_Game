@@ -46,7 +46,7 @@ graph TD
 
 1.  **Repo klonen:**
     ```bash
-    git clone https://github.com/yourusername/aether-gs.git
+    git clone https://github.com/Hunter5Thompson/Wargame_Multiplayer_Tactical_Game.git
     cd aether-gs
     ```
 
