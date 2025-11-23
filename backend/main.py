@@ -1,12 +1,19 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from typing import List, Dict
 import json
 import logging
+import numpy as np
+from PIL import Image
+from pathlib import Path
+import os
 
 from backend.services.gamestate import (
     StateManager, GameState, Unit, UnitType, Team, UnitStatus, Position
 )
+from backend.services.generator import ScenarioGenerator, QuickMapGenerator
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -62,11 +69,60 @@ state_manager = StateManager()
 # Initialize default game session
 default_session = state_manager.create_session("default", map_size=(200, 200))
 
+# Initialize Generators
+scenario_generator = ScenarioGenerator(device="cpu") # Force CPU for compatibility if no CUDA
+# Ensure output directory exists
+OUTPUT_DIR = Path("generated_maps")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Mount Static Files for generated assets
+app.mount("/assets", StaticFiles(directory=OUTPUT_DIR), name="assets")
+
 # --- Routes ---
 
 @app.get("/")
 async def root():
     return {"status": "online", "system": "Skyfield Aether-GS Core"}
+
+@app.post("/api/map/generate")
+async def generate_map(type: str = "mixed", seed: int = None):
+    """Generates a new map and updates the game state"""
+    try:
+        logger.info(f"Starting map generation: {type}")
+        
+        # 1. Generate Assets
+        # For prototype speed, use QuickMapGenerator for heightmap if type is 'quick'
+        if type == "quick":
+            heightmap = QuickMapGenerator.generate_perlin_heightmap(width=200, height=200, seed=seed)
+            # Create dummy image for consistency
+            img = Image.new('RGB', (200, 200), color = 'green')
+            img.save(OUTPUT_DIR / "satellite.png")
+            np.save(OUTPUT_DIR / "heightmap.npy", heightmap)
+        else:
+            # Full AI Pipeline
+            result = scenario_generator.generate_scenario(
+                terrain_type=type,
+                output_dir=OUTPUT_DIR,
+                image_size=(512, 512), # Smaller for speed
+                height_range=(0.0, 50.0),
+                seed=seed
+            )
+            heightmap = result["heightmap"]
+
+        # 2. Update Game State
+        # Resize heightmap to match game grid if necessary, or update game grid size
+        # For now, we assume 1px = 1m
+        default_session.heightmap.load_from_array(heightmap)
+        
+        return {
+            "status": "success", 
+            "map_url": "/assets/satellite.png",
+            "heightmap_url": "/assets/heightmap.npy",
+            "splat_url": "/assets/scene.splat" # Placeholder until we have real splat generation
+        }
+    except Exception as e:
+        logger.error(f"Map generation failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 @app.on_event("startup")
 async def startup_event():

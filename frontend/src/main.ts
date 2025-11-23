@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { SplatLoader } from './engine/SplatLoader';
+import './style.css';
 
 // --- Types ---
 type UnitData = {
@@ -32,6 +34,7 @@ let controls: OrbitControls;
 let raycaster = new THREE.Raycaster();
 let mouse = new THREE.Vector2();
 let groundPlane: THREE.Mesh;
+let splatLoader: SplatLoader;
 let units: Map<string, UnitMesh> = new Map(); // Map ID -> Mesh
 let selectedUnitId: string | null = null;
 let isDragging = false;
@@ -43,10 +46,12 @@ function initNetwork() {
 
     socket.onopen = () => {
         console.log("[NET] Connected to Skyfield Core");
-        const statusElement = document.getElementById('status');
-        if (statusElement) {
+        const statusElement = document.getElementById('net-status-text');
+        const dotElement = document.getElementById('net-status-dot');
+        if (statusElement && dotElement) {
             statusElement.innerText = "ONLINE";
-            statusElement.style.color = "#0f0";
+            statusElement.style.color = "var(--color-primary)";
+            dotElement.className = "status-dot online";
         }
     };
 
@@ -61,25 +66,29 @@ function initNetwork() {
 
     socket.onerror = (error) => {
         console.error('[NET] WebSocket error:', error);
-        const statusElement = document.getElementById('status');
-        if (statusElement) {
+        const statusElement = document.getElementById('net-status-text');
+        const dotElement = document.getElementById('net-status-dot');
+        if (statusElement && dotElement) {
             statusElement.innerText = "ERROR";
-            statusElement.style.color = "#f00";
+            statusElement.style.color = "var(--color-danger)";
+            dotElement.className = "status-dot error";
         }
     };
 
     socket.onclose = () => {
         console.log('[NET] Connection closed');
-        const statusElement = document.getElementById('status');
-        if (statusElement) {
+        const statusElement = document.getElementById('net-status-text');
+        const dotElement = document.getElementById('net-status-dot');
+        if (statusElement && dotElement) {
             statusElement.innerText = "OFFLINE";
-            statusElement.style.color = "#f80";
+            statusElement.style.color = "var(--color-text-muted)";
+            dotElement.className = "status-dot offline";
         }
     };
 }
 
 function sendMove(id: string, x: number, z: number) {
-    if(socket.readyState === WebSocket.OPEN) {
+    if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'MOVE', id, x, z }));
     }
 }
@@ -103,7 +112,7 @@ function handleNetworkMessage(msg: NetworkMessage) {
             unit.targetPosition = new THREE.Vector3(msg.x, 0, msg.z);
 
             // Update UI if selected
-            if(selectedUnitId === msg.id) updateUnitUI(msg.id, msg.x, msg.z);
+            if (selectedUnitId === msg.id) updateUnitUI(msg.id, msg.x, msg.z);
         }
     }
 }
@@ -113,16 +122,16 @@ function init() {
     // Scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
-    
+
     // Camera
     camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 80, 80);
-    
+
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.getElementById('canvas-container')?.appendChild(renderer.domElement);
-    
+
     // Controls
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -135,7 +144,9 @@ function init() {
     scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
     // Environment (Physics & Visuals)
+    splatLoader = new SplatLoader(scene);
     setupEnvironment();
+    setupUI();
 
     // Init Demo Units
     spawnUnit({ id: 'u1', name: 'Leopard 2A7', team: 'blue', x: -10, z: 10 });
@@ -162,20 +173,20 @@ function setupEnvironment() {
         console.error('Failed to get 2D context');
         return;
     }
-    ctx.fillStyle = '#2b332b'; ctx.fillRect(0,0,512,512);
+    ctx.fillStyle = '#2b332b'; ctx.fillRect(0, 0, 512, 512);
     // Noise
-    for(let i=0; i<1000; i++) {
-        ctx.fillStyle = Math.random()>0.5 ? '#354035' : '#202820';
-        ctx.beginPath(); ctx.arc(Math.random()*512, Math.random()*512, Math.random()*5, 0, Math.PI * 2); ctx.fill();
+    for (let i = 0; i < 1000; i++) {
+        ctx.fillStyle = Math.random() > 0.5 ? '#354035' : '#202820';
+        ctx.beginPath(); ctx.arc(Math.random() * 512, Math.random() * 512, Math.random() * 5, 0, Math.PI * 2); ctx.fill();
     }
     // Roads
     ctx.strokeStyle = '#444'; ctx.lineWidth = 20;
-    ctx.beginPath(); ctx.moveTo(0,256); ctx.lineTo(512,256); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 256); ctx.lineTo(512, 256); ctx.stroke();
 
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.MeshBasicMaterial({ map: tex });
     const geo1 = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
-    geo1.rotateX(-Math.PI/2);
+    geo1.rotateX(-Math.PI / 2);
     const visual = new THREE.Mesh(geo1, mat);
     visual.position.y = -0.1;
     scene.add(visual);
@@ -183,10 +194,10 @@ function setupEnvironment() {
     // 2. Physics Layer (Invisible)
     const physMat = new THREE.MeshBasicMaterial({ visible: false }); // set true to debug
     const geo2 = new THREE.PlaneGeometry(CONFIG.mapWidth, CONFIG.mapHeight);
-    geo2.rotateX(-Math.PI/2);
+    geo2.rotateX(-Math.PI / 2);
     groundPlane = new THREE.Mesh(geo2, physMat);
     scene.add(groundPlane);
-    
+
     const grid = new THREE.GridHelper(CONFIG.mapWidth, 20, 0x000000, 0x555555);
     grid.position.y = 0.05;
     grid.material.opacity = 0.2;
@@ -209,7 +220,7 @@ function spawnUnit(data: UnitData): UnitMesh {
 
     // Selection Ring
     const ring = new THREE.Mesh(
-        new THREE.RingGeometry(5, 5.5, 32).rotateX(-Math.PI/2),
+        new THREE.RingGeometry(5, 5.5, 32).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: 0x00ff00, visible: false })
     );
     ring.position.y = 0.1;
@@ -227,9 +238,9 @@ function spawnUnit(data: UnitData): UnitMesh {
 
 function onPointerDown(e: PointerEvent) {
     // Only interact if clicking on the canvas (ignore UI)
-    if(!renderer.domElement.contains(e.target as Node)) return;
+    if (!renderer.domElement.contains(e.target as Node)) return;
 
-    if(e.button !== 0) return;
+    if (e.button !== 0) return;
     updateMouse(e);
     raycaster.setFromCamera(mouse, camera);
 
@@ -237,22 +248,22 @@ function onPointerDown(e: PointerEvent) {
     const intersectObjects = Array.from(units.values()).map(u => u.children[0]); // check box meshes
     const hits = raycaster.intersectObjects(intersectObjects);
 
-    if(hits.length > 0) {
+    if (hits.length > 0) {
         const group = hits[0].object.parent as THREE.Group;
         selectUnit(group.userData.id);
-        
+
         isDragging = true;
         controls.enabled = false;
-        
+
         // Calc offset
         const groundHits = raycaster.intersectObject(groundPlane);
-        if(groundHits.length > 0) {
+        if (groundHits.length > 0) {
             dragOffset.subVectors(group.position, groundHits[0].point);
         }
     } else {
         // Deselect if clicking ground
         const groundHits = raycaster.intersectObject(groundPlane);
-        if(groundHits.length > 0) {
+        if (groundHits.length > 0) {
             selectUnit(null);
         }
     }
@@ -262,17 +273,17 @@ function onPointerMove(e: PointerEvent) {
     updateMouse(e);
 
     // Only interact if pointer is over the canvas (ignore UI)
-    if(isDragging && !renderer.domElement.contains(e.target as Node)) {
+    if (isDragging && !renderer.domElement.contains(e.target as Node)) {
         // Cancel drag if pointer moves over UI
         onPointerUp();
         return;
     }
 
-    if(isDragging && selectedUnitId) {
+    if (isDragging && selectedUnitId) {
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObject(groundPlane);
 
-        if(hits.length > 0) {
+        if (hits.length > 0) {
             const target = hits[0].point.add(dragOffset);
             const unit = units.get(selectedUnitId);
 
@@ -295,16 +306,16 @@ function onPointerUp() {
 
 function selectUnit(id: string | null) {
     // Old deselect
-    if(selectedUnitId) {
+    if (selectedUnitId) {
         const u = units.get(selectedUnitId);
-        if(u) u.userData.selectionRing.visible = false;
+        if (u) u.userData.selectionRing.visible = false;
     }
 
     selectedUnitId = id;
     const ui = document.getElementById('unit-panel');
     if (!ui) return;
 
-    if(id) {
+    if (id) {
         const u = units.get(id);
         if (!u) return;
 
@@ -323,7 +334,7 @@ function selectUnit(id: string | null) {
 }
 
 function updateUnitUI(id: string, x: number, z: number) {
-    if(selectedUnitId === id) {
+    if (selectedUnitId === id) {
         const coordsElement = document.getElementById('u-coords');
         if (coordsElement) {
             coordsElement.innerText = `GRID: ${x.toFixed(1)} / ${z.toFixed(1)}`;
@@ -364,6 +375,83 @@ function animate() {
     });
 
     renderer.render(scene, camera);
+}
+
+// --- UI & Map Gen ---
+function setupUI() {
+    // Create Main UI Layer
+    const uiLayer = document.createElement('div');
+    uiLayer.id = 'ui-layer';
+    uiLayer.innerHTML = `
+        <div class="top-bar">
+            <!-- Map Controls -->
+            <div id="map-controls" class="glass-panel">
+                <h3>Tactical Map</h3>
+                <select id="map-type">
+                    <option value="quick">Quick (Perlin Noise)</option>
+                    <option value="mixed">Mixed Terrain (AI)</option>
+                    <option value="desert">Desert Ops (AI)</option>
+                    <option value="urban">Urban Center (AI)</option>
+                </select>
+                <button id="btn-gen" class="btn">Initialize Sector</button>
+                <div id="gen-status">> SYSTEM READY</div>
+            </div>
+
+            <!-- Network Status -->
+            <div class="glass-panel status-indicator">
+                <div id="net-status-dot" class="status-dot offline"></div>
+                <span id="net-status-text">CONNECTING...</span>
+            </div>
+        </div>
+
+        <!-- Unit Panel (Bottom) -->
+        <div id="unit-panel" class="glass-panel">
+            <div class="unit-header">
+                <span id="u-name" class="unit-name">UNIT NAME</span>
+                <span class="status-dot online"></span>
+            </div>
+            <div class="unit-stats">
+                <div class="stat-row"><span>GRID</span> <span id="u-coords" class="stat-val">-- / --</span></div>
+                <div class="stat-row"><span>STATUS</span> <span class="stat-val" style="color: var(--color-primary)">ACTIVE</span></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(uiLayer);
+
+    document.getElementById('btn-gen')?.addEventListener('click', generateMap);
+}
+
+async function generateMap() {
+    const type = (document.getElementById('map-type') as HTMLSelectElement).value;
+    const status = document.getElementById('gen-status');
+    if (status) status.innerText = "> GENERATING SECTOR...";
+
+    try {
+        const res = await fetch(`http://localhost:8000/api/map/generate?type=${type}`, { method: 'POST' });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+            if (status) status.innerText = "> LOADING ASSETS...";
+
+            // Load Splat (Visuals)
+            if (data.splat_url) {
+                // Let's update the ground plane texture at least
+                const texLoader = new THREE.TextureLoader();
+                texLoader.load(`http://localhost:8000${data.map_url}`, (tex) => {
+                    (groundPlane.material as THREE.MeshBasicMaterial).map = tex;
+                    (groundPlane.material as THREE.MeshBasicMaterial).needsUpdate = true;
+                    (groundPlane.material as THREE.MeshBasicMaterial).visible = true; // Make visible
+                });
+            }
+
+            if (status) status.innerText = "> SECTOR INITIALIZED";
+        } else {
+            if (status) status.innerText = "> ERROR: " + data.message;
+        }
+    } catch (e) {
+        console.error(e);
+        if (status) status.innerText = "> NETWORK ERROR";
+    }
 }
 
 // Boot
